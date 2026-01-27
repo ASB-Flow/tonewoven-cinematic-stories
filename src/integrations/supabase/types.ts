@@ -14,7 +14,129 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      credits: {
+        Row: {
+          balance: number
+          created_at: string
+          id: string
+          plan: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          balance?: number
+          created_at?: string
+          id?: string
+          plan?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          balance?: number
+          created_at?: string
+          id?: string
+          plan?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+          user_id: string
+          username: string | null
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+          user_id: string
+          username?: string | null
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+          user_id?: string
+          username?: string | null
+        }
+        Relationships: []
+      }
+      projects: {
+        Row: {
+          created_at: string
+          credits_used: number
+          duration_seconds: number | null
+          error_message: string | null
+          id: string
+          intensity: Database["public"]["Enums"]["intensity_level"]
+          output_audio_url: string | null
+          output_video_url: string | null
+          progress: number | null
+          reference_audio_url: string | null
+          script: string
+          source_language: string
+          status: Database["public"]["Enums"]["project_status"]
+          target_language: string
+          title: string
+          updated_at: string
+          user_id: string
+          video_format: Database["public"]["Enums"]["video_format"]
+          voice_type: string
+        }
+        Insert: {
+          created_at?: string
+          credits_used?: number
+          duration_seconds?: number | null
+          error_message?: string | null
+          id?: string
+          intensity?: Database["public"]["Enums"]["intensity_level"]
+          output_audio_url?: string | null
+          output_video_url?: string | null
+          progress?: number | null
+          reference_audio_url?: string | null
+          script: string
+          source_language?: string
+          status?: Database["public"]["Enums"]["project_status"]
+          target_language?: string
+          title: string
+          updated_at?: string
+          user_id: string
+          video_format?: Database["public"]["Enums"]["video_format"]
+          voice_type?: string
+        }
+        Update: {
+          created_at?: string
+          credits_used?: number
+          duration_seconds?: number | null
+          error_message?: string | null
+          id?: string
+          intensity?: Database["public"]["Enums"]["intensity_level"]
+          output_audio_url?: string | null
+          output_video_url?: string | null
+          progress?: number | null
+          reference_audio_url?: string | null
+          script?: string
+          source_language?: string
+          status?: Database["public"]["Enums"]["project_status"]
+          target_language?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+          video_format?: Database["public"]["Enums"]["video_format"]
+          voice_type?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +145,9 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      intensity_level: "low" | "medium" | "high"
+      project_status: "draft" | "processing" | "completed" | "failed"
+      video_format: "youtube" | "shorts"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +274,10 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      intensity_level: ["low", "medium", "high"],
+      project_status: ["draft", "processing", "completed", "failed"],
+      video_format: ["youtube", "shorts"],
+    },
   },
 } as const

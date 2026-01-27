@@ -3,11 +3,14 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Wand2, ArrowLeft, Upload, Languages, User, Flame,
   MonitorPlay, Smartphone, Sparkles, Check, ChevronRight,
-  Mic, FileText, Settings, Video
+  Mic, FileText, Settings, Video, Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
 
 type Step = "script" | "voice" | "settings" | "generate";
 
@@ -36,13 +39,18 @@ const videoFormats = [
 ];
 
 export const CreateProject = () => {
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState<Step>("script");
   const [script, setScript] = useState("");
+  const [projectTitle, setProjectTitle] = useState("");
   const [hasReferenceAudio, setHasReferenceAudio] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState("French");
   const [selectedVoice, setSelectedVoice] = useState("male-deep");
-  const [selectedIntensity, setSelectedIntensity] = useState("high");
-  const [selectedFormat, setSelectedFormat] = useState("youtube");
+  const [selectedIntensity, setSelectedIntensity] = useState<"low" | "medium" | "high">("high");
+  const [selectedFormat, setSelectedFormat] = useState<"youtube" | "shorts">("youtube");
+  const [isCreating, setIsCreating] = useState(false);
+  const [projectId, setProjectId] = useState<string | null>(null);
 
   const steps: { id: Step; label: string; icon: typeof FileText }[] = [
     { id: "script", label: "Script", icon: FileText },
@@ -53,11 +61,53 @@ export const CreateProject = () => {
 
   const currentStepIndex = steps.findIndex((s) => s.id === currentStep);
 
-  const nextStep = () => {
+  const nextStep = async () => {
     const nextIndex = currentStepIndex + 1;
     if (nextIndex < steps.length) {
-      setCurrentStep(steps[nextIndex].id);
+      // If moving to generate step, create the project first
+      if (steps[nextIndex].id === "generate") {
+        await createProject();
+      } else {
+        setCurrentStep(steps[nextIndex].id);
+      }
     }
+  };
+
+  const createProject = async () => {
+    if (!user) return;
+    
+    setIsCreating(true);
+    
+    // Generate title from first few words of script
+    const title = projectTitle || script.split(/\s+/).slice(0, 5).join(" ") + "...";
+    
+    const { data, error } = await supabase
+      .from("projects")
+      .insert({
+        user_id: user.id,
+        title,
+        script,
+        target_language: selectedLanguage,
+        source_language: "English",
+        voice_type: selectedVoice,
+        intensity: selectedIntensity,
+        video_format: selectedFormat,
+        status: "processing",
+        credits_used: 5,
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      toast.error("Failed to create project");
+      setIsCreating(false);
+      return;
+    }
+    
+    setProjectId(data.id);
+    setCurrentStep("generate");
+    setIsCreating(false);
+    toast.success("Project created! Generation started.");
   };
 
   const prevStep = () => {
@@ -266,7 +316,7 @@ export const CreateProject = () => {
                     {intensityLevels.map((level) => (
                       <button
                         key={level.id}
-                        onClick={() => setSelectedIntensity(level.id)}
+                        onClick={() => setSelectedIntensity(level.id as "low" | "medium" | "high")}
                         className={cn(
                           "p-4 rounded-lg text-center transition-all border-2",
                           selectedIntensity === level.id
@@ -317,7 +367,7 @@ export const CreateProject = () => {
                     {videoFormats.map((format) => (
                       <button
                         key={format.id}
-                        onClick={() => setSelectedFormat(format.id)}
+                        onClick={() => setSelectedFormat(format.id as "youtube" | "shorts")}
                         className={cn(
                           "p-6 rounded-lg text-center transition-all border-2",
                           selectedFormat === format.id
@@ -373,9 +423,15 @@ export const CreateProject = () => {
                     <ArrowLeft className="w-5 h-5 mr-2" />
                     Back
                   </Button>
-                  <Button variant="hero" size="lg" onClick={nextStep}>
-                    <Sparkles className="w-5 h-5" />
-                    Generate Video
+                  <Button variant="hero" size="lg" onClick={nextStep} disabled={isCreating}>
+                    {isCreating ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <>
+                        <Sparkles className="w-5 h-5" />
+                        Generate Video
+                      </>
+                    )}
                   </Button>
                 </div>
               </motion.div>

@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { Mic, Video, Sparkles, ArrowRight, Play, Zap, Globe, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Link } from "react-router-dom";
 
 const features = [
   {
@@ -56,8 +57,8 @@ export const LandingPage = () => {
           >
             <Button variant="ghost" size="sm">Features</Button>
             <Button variant="ghost" size="sm">Pricing</Button>
-            <Button variant="outline" size="sm">Sign In</Button>
-            <Button variant="hero" size="sm">Get Started</Button>
+            <Link to="/auth"><Button variant="outline" size="sm">Sign In</Button></Link>
+            <Link to="/auth"><Button variant="hero" size="sm">Get Started</Button></Link>
           </motion.div>
         </div>
       </nav>
@@ -102,10 +103,12 @@ export const LandingPage = () => {
               transition={{ delay: 0.4 }}
               className="flex flex-col sm:flex-row items-center justify-center gap-4"
             >
-              <Button variant="hero" size="xl" className="group">
-                Start Creating
-                <ArrowRight className="w-5 h-5 transition-transform group-hover:translate-x-1" />
-              </Button>
+              <Link to="/auth">
+                <Button variant="hero" size="xl" className="group">
+                  Start Creating
+                  <ArrowRight className="w-5 h-5 transition-transform group-hover:translate-x-1" />
+                </Button>
+              </Link>
               <Button variant="glass" size="xl" className="group">
                 <Play className="w-5 h-5" />
                 Watch Demo
@@ -251,10 +254,12 @@ export const LandingPage = () => {
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-10">
             Join thousands of creators using VoiceForge to produce stunning motivational videos.
           </p>
-          <Button variant="hero" size="xl" className="group">
-            Get Started Free
-            <ArrowRight className="w-5 h-5 transition-transform group-hover:translate-x-1" />
-          </Button>
+          <Link to="/auth">
+            <Button variant="hero" size="xl" className="group">
+              Get Started Free
+              <ArrowRight className="w-5 h-5 transition-transform group-hover:translate-x-1" />
+            </Button>
+          </Link>
         </motion.div>
       </section>
 
