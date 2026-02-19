@@ -98,53 +98,46 @@ export const CreateProject = () => {
       setTranslatedText(translateData.translatedText);
       updatePipelineStep(1, { status: "completed", detail: `${translateData.translatedText.length} caractères traduits` });
 
-      // Step 3: Generate TTS
+      // Step 3: Generate TTS using browser Speech Synthesis
       updatePipelineStep(2, { status: "active" });
 
-      // For long texts, we may need to chunk. ElevenLabs has a 5000 char limit per request.
       const textToSpeak = translateData.translatedText;
-      let audioBase64: string;
 
-      if (textToSpeak.length > 4500) {
-        // Split into chunks and generate separately
-        const chunks = splitTextIntoChunks(textToSpeak, 4000);
-        const audioChunks: string[] = [];
-
-        for (let i = 0; i < chunks.length; i++) {
-          updatePipelineStep(2, { status: "active", detail: `Partie ${i + 1}/${chunks.length}...` });
-          
-          const { data: ttsData, error: ttsError } = await supabase.functions.invoke('elevenlabs-tts', {
-            body: { text: chunks[i], voiceId: selectedVoice },
-          });
-
-          if (ttsError || ttsData?.error) {
-            throw new Error(ttsData?.error || ttsError?.message || "Échec de la génération audio");
-          }
-
-          audioChunks.push(ttsData.audioContent);
+      // Use browser's SpeechSynthesis API (free, no API key needed)
+      await new Promise<void>((resolve, reject) => {
+        if (!('speechSynthesis' in window)) {
+          reject(new Error("Votre navigateur ne supporte pas la synthèse vocale"));
+          return;
         }
 
-        // Use the first chunk for now (concatenation would need ffmpeg)
-        // TODO: implement audio concatenation
-        audioBase64 = audioChunks[0];
-        if (audioChunks.length > 1) {
-          toast.info(`Audio généré pour la première partie. Le texte complet a ${chunks.length} parties.`);
+        // Cancel any ongoing speech
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        utterance.lang = 'fr-FR';
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+
+        // Try to find a French voice
+        const voices = window.speechSynthesis.getVoices();
+        const frenchVoice = voices.find(v => v.lang.startsWith('fr'));
+        if (frenchVoice) {
+          utterance.voice = frenchVoice;
         }
-      } else {
-        const { data: ttsData, error: ttsError } = await supabase.functions.invoke('elevenlabs-tts', {
-          body: { text: textToSpeak, voiceId: selectedVoice },
-        });
 
-        if (ttsError || ttsData?.error) {
-          throw new Error(ttsData?.error || ttsError?.message || "Échec de la génération audio");
-        }
+        utterance.onend = () => resolve();
+        utterance.onerror = (e) => reject(new Error(`Erreur TTS: ${e.error}`));
 
-        audioBase64 = ttsData.audioContent;
-      }
+        // Store utterance for playback control
+        window.speechSynthesis.speak(utterance);
+        
+        // We won't have a downloadable audio file with Web Speech API
+        // but we can still let the user hear it
+        updatePipelineStep(2, { status: "active", detail: "Lecture en cours..." });
+      });
 
-      const generatedAudioUrl = `data:audio/mpeg;base64,${audioBase64}`;
-      setAudioUrl(generatedAudioUrl);
-      updatePipelineStep(2, { status: "completed", detail: "Audio généré avec succès" });
+      setAudioUrl("browser-speech"); // marker indicating browser TTS was used
+      updatePipelineStep(2, { status: "completed", detail: "Audio généré via synthèse vocale du navigateur" });
 
       // Step 4: Save project to database
       updatePipelineStep(3, { status: "active" });
@@ -206,9 +199,24 @@ export const CreateProject = () => {
   };
 
   const togglePlayback = () => {
-    if (!audioUrl) return;
+    if (!audioUrl || !translatedText) return;
 
-    if (audioElement) {
+    if (audioUrl === "browser-speech") {
+      // Browser Speech Synthesis playback
+      if (isPlaying) {
+        window.speechSynthesis.cancel();
+        setIsPlaying(false);
+      } else {
+        const utterance = new SpeechSynthesisUtterance(translatedText);
+        utterance.lang = 'fr-FR';
+        const voices = window.speechSynthesis.getVoices();
+        const frenchVoice = voices.find(v => v.lang.startsWith('fr'));
+        if (frenchVoice) utterance.voice = frenchVoice;
+        utterance.onend = () => setIsPlaying(false);
+        window.speechSynthesis.speak(utterance);
+        setIsPlaying(true);
+      }
+    } else if (audioElement) {
       if (isPlaying) {
         audioElement.pause();
         setIsPlaying(false);
@@ -226,7 +234,10 @@ export const CreateProject = () => {
   };
 
   const downloadAudio = () => {
-    if (!audioUrl) return;
+    if (!audioUrl || audioUrl === "browser-speech") {
+      toast.info("Le téléchargement n'est pas disponible avec la synthèse vocale du navigateur. Utilisez une clé API ElevenLabs pour obtenir un fichier audio.");
+      return;
+    }
     const link = document.createElement('a');
     link.href = audioUrl;
     link.download = 'voiceforge-french-audio.mp3';
