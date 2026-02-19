@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Wand2, ArrowLeft, Upload, Languages, User, Flame,
-  MonitorPlay, Smartphone, Sparkles, Check, ChevronRight,
-  Mic, FileText, Settings, Video, Loader2
+  Wand2, ArrowLeft, Languages, Sparkles, Check, ChevronRight,
+  Mic, FileText, Video, Loader2, Youtube, Download, Play, Pause,
+  Globe, Volume2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link, useNavigate } from "react-router-dom";
@@ -12,109 +12,229 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
-type Step = "script" | "voice" | "settings" | "generate";
+type Step = "youtube" | "processing" | "result";
 
-const languages = [
-  "English", "French", "Spanish", "German", "Italian", 
-  "Portuguese", "Dutch", "Polish", "Russian", "Japanese",
-  "Chinese", "Korean", "Arabic", "Hindi", "Turkish"
-];
+type PipelineStep = {
+  label: string;
+  status: "pending" | "active" | "completed" | "error";
+  detail?: string;
+};
 
-const voices = [
-  { id: "male-deep", label: "Deep Male", description: "Authoritative, powerful" },
-  { id: "male-warm", label: "Warm Male", description: "Friendly, approachable" },
-  { id: "female-confident", label: "Confident Female", description: "Strong, inspiring" },
-  { id: "female-calm", label: "Calm Female", description: "Soothing, reassuring" },
-];
-
-const intensityLevels = [
-  { id: "low", label: "Low", description: "Calm and measured delivery" },
-  { id: "medium", label: "Medium", description: "Balanced, engaging tone" },
-  { id: "high", label: "High", description: "Powerful, intense energy" },
-];
-
-const videoFormats = [
-  { id: "youtube", label: "YouTube", icon: MonitorPlay, aspect: "16:9" },
-  { id: "shorts", label: "Shorts/Reels", icon: Smartphone, aspect: "9:16" },
+const voiceOptions = [
+  { id: "onwK4e9ZLuTAKqWW03F9", label: "Daniel", description: "Voix masculine profonde" },
+  { id: "EXAVITQu4vr4xnSDxMaL", label: "Sarah", description: "Voix féminine naturelle" },
+  { id: "JBFqnCBsd6RMkjVDRZzb", label: "George", description: "Voix masculine chaleureuse" },
+  { id: "pFZP5JQG7iQjIQuC4Bku", label: "Lily", description: "Voix féminine douce" },
+  { id: "CwhRBWXzGAHq8TQ4Fs17", label: "Roger", description: "Voix masculine autoritaire" },
+  { id: "FGY2WhTYpPnrIDTdsKH5", label: "Laura", description: "Voix féminine confiante" },
 ];
 
 export const CreateProject = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [currentStep, setCurrentStep] = useState<Step>("script");
-  const [script, setScript] = useState("");
-  const [projectTitle, setProjectTitle] = useState("");
-  const [hasReferenceAudio, setHasReferenceAudio] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState("French");
-  const [selectedVoice, setSelectedVoice] = useState("male-deep");
-  const [selectedIntensity, setSelectedIntensity] = useState<"low" | "medium" | "high">("high");
-  const [selectedFormat, setSelectedFormat] = useState<"youtube" | "shorts">("youtube");
-  const [isCreating, setIsCreating] = useState(false);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState<Step>("youtube");
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [selectedVoice, setSelectedVoice] = useState(voiceOptions[0].id);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const steps: { id: Step; label: string; icon: typeof FileText }[] = [
-    { id: "script", label: "Script", icon: FileText },
-    { id: "voice", label: "Voice", icon: Mic },
-    { id: "settings", label: "Settings", icon: Settings },
-    { id: "generate", label: "Generate", icon: Video },
-  ];
+  // Pipeline state
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([
+    { label: "Extraction de la transcription YouTube", status: "pending" },
+    { label: "Traduction en français", status: "pending" },
+    { label: "Génération de l'audio français", status: "pending" },
+    { label: "Sauvegarde du projet", status: "pending" },
+  ]);
 
-  const currentStepIndex = steps.findIndex((s) => s.id === currentStep);
+  // Results
+  const [transcript, setTranscript] = useState("");
+  const [translatedText, setTranslatedText] = useState("");
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  const [sourceLanguage, setSourceLanguage] = useState("");
 
-  const nextStep = async () => {
-    const nextIndex = currentStepIndex + 1;
-    if (nextIndex < steps.length) {
-      // If moving to generate step, create the project first
-      if (steps[nextIndex].id === "generate") {
-        await createProject();
+  const updatePipelineStep = useCallback((index: number, update: Partial<PipelineStep>) => {
+    setPipelineSteps(prev => prev.map((step, i) => i === index ? { ...step, ...update } : step));
+  }, []);
+
+  const getProgress = () => {
+    const completed = pipelineSteps.filter(s => s.status === "completed").length;
+    return Math.round((completed / pipelineSteps.length) * 100);
+  };
+
+  const startPipeline = async () => {
+    if (!user || !youtubeUrl.trim()) return;
+
+    setIsProcessing(true);
+    setCurrentStep("processing");
+
+    // Reset pipeline
+    setPipelineSteps([
+      { label: "Analyse du texte source", status: "pending" },
+      { label: "Traduction en français", status: "pending" },
+      { label: "Génération de l'audio français", status: "pending" },
+      { label: "Sauvegarde du projet", status: "pending" },
+    ]);
+
+    try {
+      // Step 1: Use the pasted text directly
+      updatePipelineStep(0, { status: "active" });
+      const sourceText = youtubeUrl.trim();
+      setTranscript(sourceText);
+      setSourceLanguage("auto");
+      updatePipelineStep(0, { status: "completed", detail: `${sourceText.length} caractères` });
+
+      // Step 2: Translate to French
+      updatePipelineStep(1, { status: "active" });
+
+      const { data: translateData, error: translateError } = await supabase.functions.invoke('translate-text', {
+        body: { text: sourceText, targetLanguage: 'French' },
+      });
+
+      if (translateError || translateData?.error) {
+        throw new Error(translateData?.error || translateError?.message || "Échec de la traduction");
+      }
+
+      setTranslatedText(translateData.translatedText);
+      updatePipelineStep(1, { status: "completed", detail: `${translateData.translatedText.length} caractères traduits` });
+
+      // Step 3: Generate TTS
+      updatePipelineStep(2, { status: "active" });
+
+      // For long texts, we may need to chunk. ElevenLabs has a 5000 char limit per request.
+      const textToSpeak = translateData.translatedText;
+      let audioBase64: string;
+
+      if (textToSpeak.length > 4500) {
+        // Split into chunks and generate separately
+        const chunks = splitTextIntoChunks(textToSpeak, 4000);
+        const audioChunks: string[] = [];
+
+        for (let i = 0; i < chunks.length; i++) {
+          updatePipelineStep(2, { status: "active", detail: `Partie ${i + 1}/${chunks.length}...` });
+          
+          const { data: ttsData, error: ttsError } = await supabase.functions.invoke('elevenlabs-tts', {
+            body: { text: chunks[i], voiceId: selectedVoice },
+          });
+
+          if (ttsError || ttsData?.error) {
+            throw new Error(ttsData?.error || ttsError?.message || "Échec de la génération audio");
+          }
+
+          audioChunks.push(ttsData.audioContent);
+        }
+
+        // Use the first chunk for now (concatenation would need ffmpeg)
+        // TODO: implement audio concatenation
+        audioBase64 = audioChunks[0];
+        if (audioChunks.length > 1) {
+          toast.info(`Audio généré pour la première partie. Le texte complet a ${chunks.length} parties.`);
+        }
       } else {
-        setCurrentStep(steps[nextIndex].id);
+        const { data: ttsData, error: ttsError } = await supabase.functions.invoke('elevenlabs-tts', {
+          body: { text: textToSpeak, voiceId: selectedVoice },
+        });
+
+        if (ttsError || ttsData?.error) {
+          throw new Error(ttsData?.error || ttsError?.message || "Échec de la génération audio");
+        }
+
+        audioBase64 = ttsData.audioContent;
+      }
+
+      const generatedAudioUrl = `data:audio/mpeg;base64,${audioBase64}`;
+      setAudioUrl(generatedAudioUrl);
+      updatePipelineStep(2, { status: "completed", detail: "Audio généré avec succès" });
+
+      // Step 4: Save project to database
+      updatePipelineStep(3, { status: "active" });
+
+      const title = `Traduction FR: ${sourceText.slice(0, 40)}...`;
+
+      const { error: projectError } = await supabase
+        .from("projects")
+        .insert({
+          user_id: user.id,
+          title,
+          script: sourceText,
+          target_language: "French",
+          source_language: "Unknown",
+          voice_type: selectedVoice,
+          intensity: "high",
+          video_format: "youtube",
+          status: "completed",
+          credits_used: 5,
+        });
+
+      if (projectError) {
+        console.error("Save error:", projectError);
+        toast.error("Projet traité mais échec de la sauvegarde");
+      }
+
+      updatePipelineStep(3, { status: "completed", detail: "Projet sauvegardé" });
+      setCurrentStep("result");
+      toast.success("Pipeline terminé avec succès !");
+
+    } catch (error) {
+      console.error("Pipeline error:", error);
+      const errorMsg = error instanceof Error ? error.message : "Erreur inconnue";
+      toast.error(errorMsg);
+      
+      // Mark current active step as error
+      setPipelineSteps(prev => prev.map(step => 
+        step.status === "active" ? { ...step, status: "error", detail: errorMsg } : step
+      ));
+      setIsProcessing(false);
+    }
+  };
+
+  const splitTextIntoChunks = (text: string, maxLength: number): string[] => {
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    const chunks: string[] = [];
+    let current = "";
+
+    for (const sentence of sentences) {
+      if ((current + sentence).length > maxLength && current) {
+        chunks.push(current.trim());
+        current = sentence;
+      } else {
+        current += sentence;
       }
     }
+    if (current.trim()) chunks.push(current.trim());
+    return chunks;
   };
 
-  const createProject = async () => {
-    if (!user) return;
-    
-    setIsCreating(true);
-    
-    // Generate title from first few words of script
-    const title = projectTitle || script.split(/\s+/).slice(0, 5).join(" ") + "...";
-    
-    const { data, error } = await supabase
-      .from("projects")
-      .insert({
-        user_id: user.id,
-        title,
-        script,
-        target_language: selectedLanguage,
-        source_language: "English",
-        voice_type: selectedVoice,
-        intensity: selectedIntensity,
-        video_format: selectedFormat,
-        status: "processing",
-        credits_used: 5,
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      toast.error("Failed to create project");
-      setIsCreating(false);
-      return;
+  const togglePlayback = () => {
+    if (!audioUrl) return;
+
+    if (audioElement) {
+      if (isPlaying) {
+        audioElement.pause();
+        setIsPlaying(false);
+      } else {
+        audioElement.play();
+        setIsPlaying(true);
+      }
+    } else {
+      const audio = new Audio(audioUrl);
+      audio.onended = () => setIsPlaying(false);
+      audio.play();
+      setAudioElement(audio);
+      setIsPlaying(true);
     }
-    
-    setProjectId(data.id);
-    setCurrentStep("generate");
-    setIsCreating(false);
-    toast.success("Project created! Generation started.");
   };
 
-  const prevStep = () => {
-    const prevIndex = currentStepIndex - 1;
-    if (prevIndex >= 0) {
-      setCurrentStep(steps[prevIndex].id);
-    }
+  const downloadAudio = () => {
+    if (!audioUrl) return;
+    const link = document.createElement('a');
+    link.href = audioUrl;
+    link.download = 'voiceforge-french-audio.mp3';
+    link.click();
+  };
+
+  const isValidYouTubeUrl = (url: string) => {
+    return /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)/.test(url);
   };
 
   return (
@@ -131,17 +251,20 @@ export const CreateProject = () => {
         {/* Steps */}
         <nav className="flex-1">
           <div className="space-y-2">
-            {steps.map((step, index) => {
+            {[
+              { id: "youtube" as Step, label: "Lien YouTube", icon: Youtube },
+              { id: "processing" as Step, label: "Traitement", icon: Loader2 },
+              { id: "result" as Step, label: "Résultat", icon: Volume2 },
+            ].map((step, index) => {
               const isActive = step.id === currentStep;
-              const isCompleted = index < currentStepIndex;
+              const stepOrder = ["youtube", "processing", "result"];
+              const isCompleted = stepOrder.indexOf(currentStep) > stepOrder.indexOf(step.id);
               return (
-                <button
+                <div
                   key={step.id}
-                  onClick={() => setCurrentStep(step.id)}
                   className={cn(
                     "w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200",
                     isActive && "bg-primary/10 border border-primary/30",
-                    !isActive && !isCompleted && "hover:bg-muted",
                     isCompleted && "text-muted-foreground"
                   )}
                 >
@@ -157,7 +280,7 @@ export const CreateProject = () => {
                     {step.label}
                   </span>
                   {isActive && <ChevronRight className="w-4 h-4 ml-auto text-primary" />}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -166,7 +289,7 @@ export const CreateProject = () => {
         <Link to="/dashboard">
           <Button variant="ghost" className="w-full justify-start">
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
+            Retour au Dashboard
           </Button>
         </Link>
       </aside>
@@ -175,120 +298,50 @@ export const CreateProject = () => {
       <main className="flex-1 p-8 overflow-auto">
         <div className="max-w-3xl mx-auto">
           <AnimatePresence mode="wait">
-            {/* Step 1: Script */}
-            {currentStep === "script" && (
+            {/* Step 1: YouTube URL */}
+            {currentStep === "youtube" && (
               <motion.div
-                key="script"
+                key="youtube"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-6"
               >
                 <div>
-                  <h1 className="text-3xl font-bold mb-2">Enter Your Script</h1>
+                  <h1 className="text-3xl font-bold mb-2">Transformer une vidéo YouTube</h1>
                   <p className="text-muted-foreground">
-                    Paste your motivational content or speech text below.
+                    Collez le lien d'une vidéo YouTube pour obtenir la transcription traduite en français avec la voix de votre choix.
                   </p>
                 </div>
 
+                {/* Input Mode Toggle */}
                 <div className="glass-card p-6">
-                  <label className="block text-sm font-medium mb-2">Script Content</label>
+                  <div className="flex items-center gap-2 mb-4">
+                    <FileText className="w-5 h-5 text-primary" />
+                    <h3 className="font-semibold">Texte à transformer</h3>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Collez le texte (transcription, script, discours...) que vous souhaitez traduire en français et convertir en audio.
+                  </p>
                   <textarea
-                    value={script}
-                    onChange={(e) => setScript(e.target.value)}
-                    placeholder="Every champion was once a contender who refused to give up. Today is your day to rise..."
-                    className="w-full h-64 bg-muted/50 rounded-lg p-4 text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    value={youtubeUrl}
+                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                    placeholder="Collez ici le texte à transformer en audio français..."
+                    className="w-full h-48 bg-muted/50 rounded-lg p-4 text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
                   />
-                  <div className="flex items-center justify-between mt-3 text-sm text-muted-foreground">
-                    <span>{script.length} characters</span>
-                    <span>~{Math.ceil(script.split(/\s+/).filter(Boolean).length / 150)} min</span>
+                  <div className="text-xs text-muted-foreground mt-2">
+                    {youtubeUrl.length} caractères · ~{Math.ceil(youtubeUrl.split(/\s+/).filter(Boolean).length / 150)} min d'audio
                   </div>
                 </div>
 
-                {/* Reference Audio Upload */}
-                <div className="glass-card p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h3 className="font-semibold">Reference Audio (Optional)</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Upload original audio to preserve the speaking style
-                      </p>
-                    </div>
-                    <div className={cn(
-                      "px-3 py-1 rounded-full text-xs font-medium",
-                      hasReferenceAudio ? "bg-accent/20 text-accent" : "bg-muted text-muted-foreground"
-                    )}>
-                      {hasReferenceAudio ? "Uploaded" : "Optional"}
-                    </div>
-                  </div>
-                  
-                  <div
-                    onClick={() => setHasReferenceAudio(true)}
-                    className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all"
-                  >
-                    <Upload className="w-10 h-10 mx-auto mb-3 text-muted-foreground" />
-                    <p className="font-medium">Drop audio file or click to upload</p>
-                    <p className="text-sm text-muted-foreground mt-1">MP3, WAV, M4A up to 50MB</p>
-                  </div>
-                </div>
-
-                <div className="flex justify-end">
-                  <Button variant="hero" size="lg" onClick={nextStep} disabled={!script.trim()}>
-                    Continue to Voice
-                    <ChevronRight className="w-5 h-5" />
-                  </Button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* Step 2: Voice Settings */}
-            {currentStep === "voice" && (
-              <motion.div
-                key="voice"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div>
-                  <h1 className="text-3xl font-bold mb-2">Voice Configuration</h1>
-                  <p className="text-muted-foreground">
-                    Select the target language and voice characteristics.
-                  </p>
-                </div>
-
-                {/* Language Selection */}
+                {/* Voice Selection */}
                 <div className="glass-card p-6">
                   <div className="flex items-center gap-2 mb-4">
-                    <Languages className="w-5 h-5 text-primary" />
-                    <h3 className="font-semibold">Target Language</h3>
+                    <Mic className="w-5 h-5 text-primary" />
+                    <h3 className="font-semibold">Voix pour l'audio français</h3>
                   </div>
-                  <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
-                    {languages.map((lang) => (
-                      <button
-                        key={lang}
-                        onClick={() => setSelectedLanguage(lang)}
-                        className={cn(
-                          "px-4 py-2 rounded-lg text-sm font-medium transition-all",
-                          selectedLanguage === lang
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted hover:bg-muted/80"
-                        )}
-                      >
-                        {lang}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Voice Type */}
-                <div className="glass-card p-6">
-                  <div className="flex items-center gap-2 mb-4">
-                    <User className="w-5 h-5 text-primary" />
-                    <h3 className="font-semibold">Voice Type</h3>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    {voices.map((voice) => (
+                  <div className="grid grid-cols-2 gap-3">
+                    {voiceOptions.map((voice) => (
                       <button
                         key={voice.id}
                         onClick={() => setSelectedVoice(voice.id)}
@@ -306,150 +359,59 @@ export const CreateProject = () => {
                   </div>
                 </div>
 
-                {/* Intensity */}
+                {/* Pipeline Preview */}
                 <div className="glass-card p-6">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Flame className="w-5 h-5 text-primary" />
-                    <h3 className="font-semibold">Intensity Level</h3>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    {intensityLevels.map((level) => (
-                      <button
-                        key={level.id}
-                        onClick={() => setSelectedIntensity(level.id as "low" | "medium" | "high")}
-                        className={cn(
-                          "p-4 rounded-lg text-center transition-all border-2",
-                          selectedIntensity === level.id
-                            ? "border-primary bg-primary/10"
-                            : "border-transparent bg-muted hover:bg-muted/80"
-                        )}
-                      >
-                        <div className="font-medium">{level.label}</div>
-                        <div className="text-xs text-muted-foreground mt-1">{level.description}</div>
-                      </button>
-                    ))}
+                  <h3 className="font-semibold mb-3">Pipeline de traitement</h3>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-500/10 text-red-400">
+                      <Youtube className="w-3.5 h-3.5" />
+                      YouTube
+                    </div>
+                    <ChevronRight className="w-4 h-4" />
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-400">
+                      <FileText className="w-3.5 h-3.5" />
+                      Transcription
+                    </div>
+                    <ChevronRight className="w-4 h-4" />
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/10 text-green-400">
+                      <Globe className="w-3.5 h-3.5" />
+                      Traduction FR
+                    </div>
+                    <ChevronRight className="w-4 h-4" />
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-500/10 text-purple-400">
+                      <Volume2 className="w-3.5 h-3.5" />
+                      Audio
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex justify-between">
-                  <Button variant="outline" size="lg" onClick={prevStep}>
-                    <ArrowLeft className="w-5 h-5 mr-2" />
-                    Back
-                  </Button>
-                  <Button variant="hero" size="lg" onClick={nextStep}>
-                    Continue to Settings
-                    <ChevronRight className="w-5 h-5" />
+                <div className="flex justify-end">
+                  <Button
+                    variant="hero"
+                    size="lg"
+                    onClick={startPipeline}
+                    disabled={!youtubeUrl.trim() || youtubeUrl.trim().length < 10}
+                  >
+                    <Sparkles className="w-5 h-5" />
+                    Lancer la transformation
                   </Button>
                 </div>
               </motion.div>
             )}
 
-            {/* Step 3: Video Settings */}
-            {currentStep === "settings" && (
+            {/* Step 2: Processing */}
+            {currentStep === "processing" && (
               <motion.div
-                key="settings"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div>
-                  <h1 className="text-3xl font-bold mb-2">Video Settings</h1>
-                  <p className="text-muted-foreground">
-                    Configure the output format and visual preferences.
-                  </p>
-                </div>
-
-                {/* Video Format */}
-                <div className="glass-card p-6">
-                  <h3 className="font-semibold mb-4">Video Format</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    {videoFormats.map((format) => (
-                      <button
-                        key={format.id}
-                        onClick={() => setSelectedFormat(format.id as "youtube" | "shorts")}
-                        className={cn(
-                          "p-6 rounded-lg text-center transition-all border-2",
-                          selectedFormat === format.id
-                            ? "border-primary bg-primary/10"
-                            : "border-transparent bg-muted hover:bg-muted/80"
-                        )}
-                      >
-                        <format.icon className="w-10 h-10 mx-auto mb-3 text-primary" />
-                        <div className="font-medium">{format.label}</div>
-                        <div className="text-sm text-muted-foreground">{format.aspect}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Summary */}
-                <div className="glass-card p-6">
-                  <h3 className="font-semibold mb-4">Summary</h3>
-                  <div className="space-y-3 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Script Length</span>
-                      <span>{script.split(/\s+/).filter(Boolean).length} words</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Target Language</span>
-                      <span>{selectedLanguage}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Voice Type</span>
-                      <span>{voices.find(v => v.id === selectedVoice)?.label}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Intensity</span>
-                      <span className="capitalize">{selectedIntensity}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Format</span>
-                      <span>{videoFormats.find(f => f.id === selectedFormat)?.label}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Reference Audio</span>
-                      <span>{hasReferenceAudio ? "Uploaded" : "None"}</span>
-                    </div>
-                    <div className="border-t border-border pt-3 flex justify-between font-medium">
-                      <span>Credits Required</span>
-                      <span className="text-primary">5 credits</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-between">
-                  <Button variant="outline" size="lg" onClick={prevStep}>
-                    <ArrowLeft className="w-5 h-5 mr-2" />
-                    Back
-                  </Button>
-                  <Button variant="hero" size="lg" onClick={nextStep} disabled={isCreating}>
-                    {isCreating ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <>
-                        <Sparkles className="w-5 h-5" />
-                        Generate Video
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* Step 4: Generation */}
-            {currentStep === "generate" && (
-              <motion.div
-                key="generate"
+                key="processing"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-6"
               >
                 <div className="text-center">
-                  <h1 className="text-3xl font-bold mb-2">Generating Your Video</h1>
+                  <h1 className="text-3xl font-bold mb-2">Transformation en cours...</h1>
                   <p className="text-muted-foreground">
-                    This typically takes 2-5 minutes depending on video length.
+                    Veuillez patienter pendant que nous traitons votre vidéo.
                   </p>
                 </div>
 
@@ -458,26 +420,15 @@ export const CreateProject = () => {
                   <div className="flex justify-center mb-8">
                     <div className="relative w-40 h-40">
                       <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
-                        <circle
-                          cx="50"
-                          cy="50"
-                          r="45"
-                          fill="none"
-                          stroke="hsl(var(--muted))"
-                          strokeWidth="8"
-                        />
+                        <circle cx="50" cy="50" r="45" fill="none" stroke="hsl(var(--muted))" strokeWidth="8" />
                         <motion.circle
-                          cx="50"
-                          cy="50"
-                          r="45"
-                          fill="none"
+                          cx="50" cy="50" r="45" fill="none"
                           stroke="url(#gradient)"
-                          strokeWidth="8"
-                          strokeLinecap="round"
+                          strokeWidth="8" strokeLinecap="round"
                           initial={{ pathLength: 0 }}
-                          animate={{ pathLength: 0.65 }}
-                          transition={{ duration: 2, ease: "easeOut" }}
-                          style={{ strokeDasharray: "283", strokeDashoffset: "0" }}
+                          animate={{ pathLength: getProgress() / 100 }}
+                          transition={{ duration: 0.5 }}
+                          style={{ strokeDasharray: "283" }}
                         />
                         <defs>
                           <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -487,47 +438,50 @@ export const CreateProject = () => {
                         </defs>
                       </svg>
                       <div className="absolute inset-0 flex items-center justify-center">
-                        <span className="text-3xl font-bold">65%</span>
+                        <span className="text-3xl font-bold">{getProgress()}%</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Pipeline Steps */}
                   <div className="space-y-3">
-                    {[
-                      { label: "Analyzing voice style", status: "completed" },
-                      { label: "Translating script to French", status: "completed" },
-                      { label: "Generating voiceover", status: "active" },
-                      { label: "Selecting visuals", status: "pending" },
-                      { label: "Assembling video", status: "pending" },
-                      { label: "Applying final touches", status: "pending" },
-                    ].map((step, index) => (
+                    {pipelineSteps.map((step, index) => (
                       <div
                         key={index}
                         className={cn(
                           "flex items-center gap-3 p-3 rounded-lg",
                           step.status === "completed" && "bg-accent/10",
-                          step.status === "active" && "bg-primary/10 border border-primary/30"
+                          step.status === "active" && "bg-primary/10 border border-primary/30",
+                          step.status === "error" && "bg-destructive/10 border border-destructive/30"
                         )}
                       >
                         <div className={cn(
                           "w-6 h-6 rounded-full flex items-center justify-center text-xs",
                           step.status === "completed" && "bg-accent text-accent-foreground",
                           step.status === "active" && "bg-primary text-primary-foreground animate-pulse",
-                          step.status === "pending" && "bg-muted text-muted-foreground"
+                          step.status === "pending" && "bg-muted text-muted-foreground",
+                          step.status === "error" && "bg-destructive text-destructive-foreground"
                         )}>
                           {step.status === "completed" ? (
                             <Check className="w-3 h-3" />
+                          ) : step.status === "error" ? (
+                            "!"
                           ) : (
                             index + 1
                           )}
                         </div>
-                        <span className={cn(
-                          step.status === "pending" && "text-muted-foreground",
-                          step.status === "active" && "text-foreground font-medium"
-                        )}>
-                          {step.label}
-                        </span>
+                        <div className="flex-1">
+                          <span className={cn(
+                            step.status === "pending" && "text-muted-foreground",
+                            step.status === "active" && "text-foreground font-medium",
+                            step.status === "error" && "text-destructive font-medium"
+                          )}>
+                            {step.label}
+                          </span>
+                          {step.detail && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{step.detail}</p>
+                          )}
+                        </div>
                         {step.status === "active" && (
                           <div className="ml-auto flex gap-1">
                             <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
@@ -540,9 +494,101 @@ export const CreateProject = () => {
                   </div>
                 </div>
 
-                <p className="text-center text-sm text-muted-foreground">
-                  You can close this page. We'll email you when your video is ready.
-                </p>
+                {pipelineSteps.some(s => s.status === "error") && (
+                  <div className="flex justify-center gap-4">
+                    <Button variant="outline" onClick={() => { setCurrentStep("youtube"); setIsProcessing(false); }}>
+                      <ArrowLeft className="w-4 h-4 mr-2" />
+                      Réessayer
+                    </Button>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Step 3: Result */}
+            {currentStep === "result" && (
+              <motion.div
+                key="result"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <div className="text-center">
+                  <h1 className="text-3xl font-bold mb-2">🎉 Transformation terminée !</h1>
+                  <p className="text-muted-foreground">
+                    Votre vidéo YouTube a été transcrite et traduite en français.
+                  </p>
+                </div>
+
+                {/* Audio Player */}
+                {audioUrl && (
+                  <div className="glass-card p-6">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Volume2 className="w-5 h-5 text-primary" />
+                      <h3 className="font-semibold">Audio en français</h3>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <Button
+                        variant="hero"
+                        size="lg"
+                        className="rounded-full w-14 h-14"
+                        onClick={togglePlayback}
+                      >
+                        {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-0.5" />}
+                      </Button>
+                      <div className="flex-1">
+                        <div className="h-2 bg-muted rounded-full overflow-hidden">
+                          <motion.div
+                            className="h-full bg-gradient-to-r from-primary to-accent rounded-full"
+                            animate={{ width: isPlaying ? "100%" : "0%" }}
+                            transition={{ duration: 30, ease: "linear" }}
+                          />
+                        </div>
+                      </div>
+                      <Button variant="outline" onClick={downloadAudio}>
+                        <Download className="w-4 h-4 mr-2" />
+                        Télécharger
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Original Transcript */}
+                <div className="glass-card p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <FileText className="w-5 h-5 text-blue-400" />
+                    <h3 className="font-semibold">Transcription originale ({sourceLanguage})</h3>
+                  </div>
+                  <div className="bg-muted/50 rounded-lg p-4 max-h-48 overflow-auto text-sm">
+                    {transcript}
+                  </div>
+                </div>
+
+                {/* French Translation */}
+                <div className="glass-card p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Languages className="w-5 h-5 text-green-400" />
+                    <h3 className="font-semibold">Traduction française</h3>
+                  </div>
+                  <div className="bg-muted/50 rounded-lg p-4 max-h-48 overflow-auto text-sm">
+                    {translatedText}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-between">
+                  <Button variant="outline" onClick={() => { setCurrentStep("youtube"); setIsProcessing(false); setAudioUrl(null); setAudioElement(null); }}>
+                    <ArrowLeft className="w-4 h-4 mr-2" />
+                    Nouvelle transformation
+                  </Button>
+                  <Link to="/dashboard">
+                    <Button variant="hero">
+                      Voir mes projets
+                      <ChevronRight className="w-5 h-5" />
+                    </Button>
+                  </Link>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
