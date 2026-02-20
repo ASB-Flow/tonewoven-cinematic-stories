@@ -98,46 +98,16 @@ export const CreateProject = () => {
       setTranslatedText(translateData.translatedText);
       updatePipelineStep(1, { status: "completed", detail: `${translateData.translatedText.length} caractères traduits` });
 
-      // Step 3: Generate TTS using browser Speech Synthesis
+      // Step 3: Prepare TTS (browser Speech Synthesis - non-blocking)
       updatePipelineStep(2, { status: "active" });
 
-      const textToSpeak = translateData.translatedText;
+      if (!('speechSynthesis' in window)) {
+        console.warn("Speech synthesis not supported in this browser");
+      }
 
-      // Use browser's SpeechSynthesis API (free, no API key needed)
-      await new Promise<void>((resolve, reject) => {
-        if (!('speechSynthesis' in window)) {
-          reject(new Error("Votre navigateur ne supporte pas la synthèse vocale"));
-          return;
-        }
-
-        // Cancel any ongoing speech
-        window.speechSynthesis.cancel();
-
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.lang = 'fr-FR';
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-
-        // Try to find a French voice
-        const voices = window.speechSynthesis.getVoices();
-        const frenchVoice = voices.find(v => v.lang.startsWith('fr'));
-        if (frenchVoice) {
-          utterance.voice = frenchVoice;
-        }
-
-        utterance.onend = () => resolve();
-        utterance.onerror = (e) => reject(new Error(`Erreur TTS: ${e.error}`));
-
-        // Store utterance for playback control
-        window.speechSynthesis.speak(utterance);
-        
-        // We won't have a downloadable audio file with Web Speech API
-        // but we can still let the user hear it
-        updatePipelineStep(2, { status: "active", detail: "Lecture en cours..." });
-      });
-
-      setAudioUrl("browser-speech"); // marker indicating browser TTS was used
-      updatePipelineStep(2, { status: "completed", detail: "Audio généré via synthèse vocale du navigateur" });
+      // Just mark as ready - the user can play it from the result page
+      setAudioUrl("browser-speech");
+      updatePipelineStep(2, { status: "completed", detail: "Audio prêt — appuyez sur ▶ pour écouter" });
 
       // Step 4: Save project to database
       updatePipelineStep(3, { status: "active" });
