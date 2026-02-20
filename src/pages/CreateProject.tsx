@@ -172,19 +172,44 @@ export const CreateProject = () => {
     if (!audioUrl || !translatedText) return;
 
     if (audioUrl === "browser-speech") {
-      // Browser Speech Synthesis playback
       if (isPlaying) {
         window.speechSynthesis.cancel();
         setIsPlaying(false);
-      } else {
+        return;
+      }
+
+      const speak = () => {
+        window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(translatedText);
         utterance.lang = 'fr-FR';
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
         const voices = window.speechSynthesis.getVoices();
         const frenchVoice = voices.find(v => v.lang.startsWith('fr'));
         if (frenchVoice) utterance.voice = frenchVoice;
         utterance.onend = () => setIsPlaying(false);
+        utterance.onerror = (e) => {
+          console.error("Speech error:", e.error);
+          setIsPlaying(false);
+          toast.error("Erreur de synthèse vocale. Essayez avec un autre navigateur (Chrome recommandé).");
+        };
         window.speechSynthesis.speak(utterance);
         setIsPlaying(true);
+      };
+
+      // Voices may not be loaded yet — wait for them
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length === 0) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          speak();
+          window.speechSynthesis.onvoiceschanged = null;
+        };
+        // Fallback if onvoiceschanged never fires
+        setTimeout(() => {
+          if (!isPlaying) speak();
+        }, 500);
+      } else {
+        speak();
       }
     } else if (audioElement) {
       if (isPlaying) {
