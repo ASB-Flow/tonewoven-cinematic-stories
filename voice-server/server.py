@@ -24,7 +24,7 @@ import soundfile as sf
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
@@ -39,6 +39,17 @@ ALLOWED_ORIGINS = os.environ.get(
     "VOICE_SERVER_ORIGINS",
     "http://localhost:8080,http://localhost:8081,https://tonewoven-cinematic-stories.lovable.app",
 ).split(",")
+ALLOWED_ORIGIN_SET = {o.strip().rstrip("/") for o in ALLOWED_ORIGINS if o.strip()}
+# Host names this server answers to. Anything else is refused, which blocks DNS rebinding
+# (a malicious site pointing its own domain at 127.0.0.1 to read this server).
+ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"} | {
+    h.strip().lower() for h in os.environ.get("VOICE_SERVER_HOSTS", "").split(",") if h.strip()
+}
+# Containers accepted for uploads. Rejects playlists (HLS), concat lists and other demuxers
+# that can make ffmpeg open other files on this machine.
+SAFE_FORMATS = {"mov", "mp4", "m4a", "3gp", "3g2", "mj2", "matroska", "webm", "wav", "mp3", "ogg", "flac", "aac"}
+# ffmpeg may only read local files and pipes, never network URLs
+INPUT_PROTOCOLS = ["-protocol_whitelist", "file,pipe"]
 
 MAX_VIDEO_BYTES = 300 * 1024 * 1024
 MAX_VOICE_BYTES = 50 * 1024 * 1024
@@ -74,22 +85,46 @@ for directory in (VOICES_DIR, JOBS_DIR):
 app = FastAPI(title="VoiceForge voice server")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in ALLOWED_ORIGINS if o.strip()],
+    allow_origins=sorted(ALLOWED_ORIGIN_SET),
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
+    # Lets the hosted (https) app reach this server on localhost in Chromium browsers (allowed origins only)
+    allow_private_network=True,
     expose_headers=[
         "X-Speech-Duration", "X-Video-Duration", "X-Tempo", "X-Background", "X-Overflow", "X-Subtitles", "X-Engine",
     ],
 )
 
 
+def _host_name(host: str) -> str:
+    host = host.strip().lower()
+    if host.startswith("["):
+        return host.split("]")[0] + "]"
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
 @app.middleware("http")
-async def private_network_access(request: Request, call_next):
-    # Lets the hosted (https) app reach this server on localhost in Chromium browsers
-    response = await call_next(request)
-    if request.headers.get("access-control-request-private-network"):
-        response.headers["Access-Control-Allow-Private-Network"] = "true"
-    return response
+async def guard_origin(request: Request, call_next):
+    """Only the allowed web apps (and local tools without an Origin) may use this server.
+
+    Browsers send an Origin header on every cross-site POST and DELETE, so a page from another
+    site cannot upload files, create voices or start jobs here, even with a plain HTML form.
+    """
+    if _host_name(request.headers.get("host", "")) not in ALLOWED_HOSTS:
+        return JSONResponse({"detail": "Hôte non autorisé"}, status_code=403)
+    origin = request.headers.get("origin")
+    if origin is not None and origin.rstrip("/") not in ALLOWED_ORIGIN_SET:
+        return JSONResponse({"detail": "Origine non autorisée"}, status_code=403)
+    return await call_next(request)
+
+
+def _restrict_inputs(args: tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    for arg in args:
+        if arg == "-i":
+            out += INPUT_PROTOCOLS
+        out.append(arg)
+    return out
 
 
 # One heavy model runs at a time. Whisper and Demucs are loaded per job and freed right after,
@@ -119,7 +154,7 @@ def free_memory() -> None:
 
 def run_ffmpeg(*args: str, cwd: Path | None = None) -> None:
     result = subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", *args], capture_output=True, text=True, encoding="utf-8",
+        ["ffmpeg", "-y", "-loglevel", "error", *_restrict_inputs(args)], capture_output=True, text=True, encoding="utf-8",
         errors="replace", cwd=cwd,
     )
     if result.returncode != 0:
@@ -128,13 +163,17 @@ def run_ffmpeg(*args: str, cwd: Path | None = None) -> None:
 
 def probe(path: Path) -> dict:
     result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", str(path)],
+        ["ffprobe", "-v", "error", *INPUT_PROTOCOLS, "-show_entries", "format=format_name,duration:stream=codec_type",
+         "-of", "json", str(path)],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         raise HTTPException(400, "Fichier illisible : ce n'est pas un média valide")
     info = json.loads(result.stdout)
+    formats = set(str(info.get("format", {}).get("format_name", "")).split(","))
+    if not formats & SAFE_FORMATS:
+        raise HTTPException(400, "Format non pris en charge : envoyez un fichier MP4, MOV, WebM, MKV, WAV, MP3, OGG ou FLAC")
     return {
         "duration": float(info.get("format", {}).get("duration", 0) or 0),
         "streams": {s.get("codec_type") for s in info.get("streams", [])},
@@ -210,7 +249,7 @@ def merge_into_phrases(segments: list[dict], max_seconds: float = MAX_PHRASE_SEC
 def decode_audio(path: Path, sample_rate: int, channels: int) -> np.ndarray:
     """Decodes any media file to float32 samples, shape (frames, channels)."""
     result = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-i", str(path), "-vn", "-ac", str(channels), "-ar", str(sample_rate),
+        ["ffmpeg", "-loglevel", "error", *INPUT_PROTOCOLS, "-i", str(path), "-vn", "-ac", str(channels), "-ar", str(sample_rate),
          "-f", "f32le", "pipe:1"],
         capture_output=True,
     )
@@ -224,7 +263,8 @@ def change_tempo(audio: np.ndarray, sample_rate: int, tempo: float) -> np.ndarra
     if abs(tempo - 1) < 0.01:
         return audio
     result = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-f", "f32le", "-ar", str(sample_rate), "-ac", "1", "-i", "pipe:0",
+        ["ffmpeg", "-loglevel", "error", "-f", "f32le", "-ar", str(sample_rate), "-ac", "1", *INPUT_PROTOCOLS,
+         "-i", "pipe:0",
          "-af", f"atempo={tempo:.4f}", "-f", "f32le", "pipe:1"],
         input=audio.astype(np.float32).tobytes(),
         capture_output=True,
@@ -662,7 +702,7 @@ def write_srt(cues: list[tuple], path: Path) -> None:
 
 def video_size(path: Path) -> tuple[int, int]:
     result = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+        ["ffprobe", "-v", "error", *INPUT_PROTOCOLS, "-select_streams", "v:0", "-show_entries", "stream=width,height",
          "-of", "csv=p=0", str(path)],
         capture_output=True, text=True,
     )

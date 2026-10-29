@@ -49,9 +49,22 @@ The first transcription and the first dub download the model weights (a few GB) 
 |---|---|---|
 | `WHISPER_MODEL` | `small` | faster-whisper size (`base`, `small`, `medium`…) |
 | `DEMUCS_MODEL` | `htdemucs` | Demucs model used to remove the voices |
-| `VOICE_SERVER_ORIGINS` | localhost:8080/8081 + the Lovable app | Allowed CORS origins |
+| `VOICE_SERVER_ORIGINS` | localhost:8080/8081 + the Lovable app | The only web apps allowed to call the server (others get 403) |
+| `VOICE_SERVER_HOSTS` | (none) | Extra host names to answer to, besides localhost, 127.0.0.1 and [::1] |
 | `VOICE_SERVER_DATA` | `voice-server/data` | Where voices and jobs are stored |
 
 The web app reads the server URL from `VITE_VOICE_SERVER_URL` (default `http://localhost:8765`).
 
 Voice samples stay on this machine in `data/voices/`. Jobs are deleted after 24 hours.
+
+## Security
+
+The server has no login, so it protects itself from other websites open in your browser:
+
+- Requests from a web page whose origin is not in `VOICE_SERVER_ORIGINS` are refused (403). Local tools
+  that send no `Origin` header, such as curl or Python scripts, are allowed.
+- Requests addressed to another host name than localhost are refused, which blocks DNS rebinding.
+- Uploads must be a real media file (MP4, MOV, WebM, MKV, WAV, MP3, OGG, FLAC, AAC). Playlists and
+  concat lists are refused, and ffmpeg may only read local files, never network URLs.
+
+Keep the default `--host 127.0.0.1`: do not expose the server on your network.
