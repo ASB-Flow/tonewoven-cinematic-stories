@@ -1,24 +1,37 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
+import { corsHeaders, jsonResponse, getUser, consumeCredits, refundCredits } from "../_shared/security.ts";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
-};
+const TTS_COST = 3;
+const MAX_TEXT_LENGTH = 5000;
+const VOICE_ID_PATTERN = /^[A-Za-z0-9]{20}$/;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: corsHeaders(req) });
   }
+
+  const user = await getUser(req);
+  if (!user) {
+    return jsonResponse(req, { error: 'Authentification requise' }, 401);
+  }
+
+  let charged = false;
 
   try {
     const { text, voiceId } = await req.json();
 
-    if (!text) {
-      return new Response(
-        JSON.stringify({ error: 'Text is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (!text || typeof text !== 'string') {
+      return jsonResponse(req, { error: 'Text is required' }, 400);
+    }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return jsonResponse(req, { error: `Texte trop long (maximum ${MAX_TEXT_LENGTH} caractères)` }, 400);
+    }
+
+    // Default to a deep male French-compatible voice
+    const selectedVoiceId = voiceId || 'onwK4e9ZLuTAKqWW03F9'; // Daniel
+    if (typeof selectedVoiceId !== 'string' || !VOICE_ID_PATTERN.test(selectedVoiceId)) {
+      return jsonResponse(req, { error: 'Identifiant de voix invalide' }, 400);
     }
 
     const ELEVENLABS_API_KEY = Deno.env.get('ELEVENLABS_API_KEY');
@@ -26,10 +39,12 @@ serve(async (req) => {
       throw new Error('ELEVENLABS_API_KEY is not configured');
     }
 
-    // Default to a deep male French-compatible voice
-    const selectedVoiceId = voiceId || 'onwK4e9ZLuTAKqWW03F9'; // Daniel
+    if (!(await consumeCredits(user.id, TTS_COST))) {
+      return jsonResponse(req, { error: 'Crédits insuffisants' }, 402);
+    }
+    charged = true;
 
-    console.log(`Generating TTS for ${text.length} chars with voice ${selectedVoiceId}`);
+    console.log(`Generating TTS for ${text.length} chars with voice ${selectedVoiceId} for user ${user.id}`);
 
     const response = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}?output_format=mp3_44100_128`,
@@ -63,15 +78,10 @@ serve(async (req) => {
 
     console.log(`TTS generated: ${audioBuffer.byteLength} bytes`);
 
-    return new Response(
-      JSON.stringify({ audioContent: audioBase64 }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse(req, { audioContent: audioBase64, creditsUsed: TTS_COST });
   } catch (error) {
     console.error('TTS error:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'TTS generation failed' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    if (charged) await refundCredits(user.id, TTS_COST);
+    return jsonResponse(req, { error: error instanceof Error ? error.message : 'TTS generation failed' }, 500);
   }
 });

@@ -1,0 +1,33 @@
+[project]
+name = "voice-server"
+version = "0.1.0"
+description = "Local transcription, voice cloning TTS and muxing for the Short FR page"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "torch==2.6.0",
+  "torchaudio==2.6.0",
+  "chatterbox-tts",
+  "faster-whisper",
+  "demucs",
+  "soundfile",
+  "numpy",
+  "yt-dlp[default]",
+  "edge-tts",
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart",
+]
+
+[tool.uv]
+package = false
+
+# CPU-only PyTorch (~200 MB instead of ~2.4 GB for CUDA). To use an NVIDIA GPU,
+# point both sources at https://download.pytorch.org/whl/cu124 and run `uv lock`.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+torchaudio = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

@@ -1,23 +1,35 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { corsHeaders, jsonResponse, getUser, consumeCredits, refundCredits } from "../_shared/security.ts";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
-};
+const TRANSLATION_COST = 2;
+const MAX_TEXT_LENGTH = 20000;
+const LANGUAGE_PATTERN = /^[\p{L} ()-]{2,40}$/u;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: corsHeaders(req) });
   }
+
+  const user = await getUser(req);
+  if (!user) {
+    return jsonResponse(req, { error: 'Authentification requise' }, 401);
+  }
+
+  let charged = false;
 
   try {
     const { text, targetLanguage } = await req.json();
 
-    if (!text) {
-      return new Response(
-        JSON.stringify({ error: 'Text is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (!text || typeof text !== 'string') {
+      return jsonResponse(req, { error: 'Text is required' }, 400);
+    }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return jsonResponse(req, { error: `Texte trop long (maximum ${MAX_TEXT_LENGTH} caractères)` }, 400);
+    }
+
+    const language = targetLanguage || 'French';
+    if (typeof language !== 'string' || !LANGUAGE_PATTERN.test(language)) {
+      return jsonResponse(req, { error: 'Langue cible invalide' }, 400);
     }
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
@@ -25,9 +37,12 @@ serve(async (req) => {
       throw new Error('LOVABLE_API_KEY is not configured');
     }
 
-    const language = targetLanguage || 'French';
+    if (!(await consumeCredits(user.id, TRANSLATION_COST))) {
+      return jsonResponse(req, { error: 'Crédits insuffisants' }, 402);
+    }
+    charged = true;
 
-    console.log(`Translating ${text.length} chars to ${language}`);
+    console.log(`Translating ${text.length} chars to ${language} for user ${user.id}`);
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -40,8 +55,8 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: `You are a professional translator. Translate the following text to ${language}. 
-            
+            content: `You are a professional translator. Translate the following text to ${language}.
+
 Rules:
 - Preserve the original meaning, tone, and emotion
 - Keep the same speaking style (formal/informal)
@@ -59,16 +74,14 @@ Rules:
 
     if (!response.ok) {
       if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        await refundCredits(user.id, TRANSLATION_COST);
+        charged = false;
+        return jsonResponse(req, { error: 'Rate limit exceeded. Please try again later.' }, 429);
       }
       if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'AI credits exhausted. Please add funds.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        await refundCredits(user.id, TRANSLATION_COST);
+        charged = false;
+        return jsonResponse(req, { error: 'AI credits exhausted. Please add funds.' }, 402);
       }
       const errorText = await response.text();
       console.error('AI gateway error:', response.status, errorText);
@@ -84,15 +97,10 @@ Rules:
 
     console.log(`Translation complete: ${translatedText.length} chars`);
 
-    return new Response(
-      JSON.stringify({ translatedText, targetLanguage: language }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse(req, { translatedText, targetLanguage: language, creditsUsed: TRANSLATION_COST });
   } catch (error) {
     console.error('Translation error:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Translation failed' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    if (charged) await refundCredits(user.id, TRANSLATION_COST);
+    return jsonResponse(req, { error: error instanceof Error ? error.message : 'Translation failed' }, 500);
   }
 });

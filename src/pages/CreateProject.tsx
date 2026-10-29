@@ -1,9 +1,8 @@
 import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Wand2, ArrowLeft, Languages, Sparkles, Check, ChevronRight,
-  Mic, FileText, Video, Loader2, Youtube, Download, Play, Pause,
-  Globe, Volume2
+  Wand2, ArrowLeft, Sparkles, Check, ChevronRight,
+  Mic, FileText, Loader2, Globe, Volume2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link, useNavigate } from "react-router-dom";
@@ -11,8 +10,9 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { AUDIO_BUCKET, generateSpeech, getAudioDuration, invokeFunction, voiceOptions } from "@/lib/audio";
 
-type Step = "youtube" | "processing" | "result";
+type Step = "text" | "processing";
 
 type PipelineStep = {
   label: string;
@@ -20,38 +20,20 @@ type PipelineStep = {
   detail?: string;
 };
 
-const voiceOptions = [
-  { id: "onwK4e9ZLuTAKqWW03F9", label: "Daniel", description: "Voix masculine profonde" },
-  { id: "EXAVITQu4vr4xnSDxMaL", label: "Sarah", description: "Voix féminine naturelle" },
-  { id: "JBFqnCBsd6RMkjVDRZzb", label: "George", description: "Voix masculine chaleureuse" },
-  { id: "pFZP5JQG7iQjIQuC4Bku", label: "Lily", description: "Voix féminine douce" },
-  { id: "CwhRBWXzGAHq8TQ4Fs17", label: "Roger", description: "Voix masculine autoritaire" },
-  { id: "FGY2WhTYpPnrIDTdsKH5", label: "Laura", description: "Voix féminine confiante" },
+const initialPipeline = (): PipelineStep[] => [
+  { label: "Création du projet", status: "pending" },
+  { label: "Traduction en français", status: "pending" },
+  { label: "Génération de l'audio français", status: "pending" },
+  { label: "Sauvegarde de l'audio", status: "pending" },
 ];
 
 export const CreateProject = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [currentStep, setCurrentStep] = useState<Step>("youtube");
-  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [currentStep, setCurrentStep] = useState<Step>("text");
+  const [sourceText, setSourceText] = useState("");
   const [selectedVoice, setSelectedVoice] = useState(voiceOptions[0].id);
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  // Pipeline state
-  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([
-    { label: "Extraction de la transcription YouTube", status: "pending" },
-    { label: "Traduction en français", status: "pending" },
-    { label: "Génération de l'audio français", status: "pending" },
-    { label: "Sauvegarde du projet", status: "pending" },
-  ]);
-
-  // Results
-  const [transcript, setTranscript] = useState("");
-  const [translatedText, setTranslatedText] = useState("");
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
-  const [sourceLanguage, setSourceLanguage] = useState("");
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>(initialPipeline);
 
   const updatePipelineStep = useCallback((index: number, update: Partial<PipelineStep>) => {
     setPipelineSteps(prev => prev.map((step, i) => i === index ? { ...step, ...update } : step));
@@ -63,185 +45,118 @@ export const CreateProject = () => {
   };
 
   const startPipeline = async () => {
-    if (!user || !youtubeUrl.trim()) return;
+    const text = sourceText.trim();
+    if (!user || !text) return;
 
-    setIsProcessing(true);
     setCurrentStep("processing");
+    setPipelineSteps(initialPipeline());
 
-    // Reset pipeline
-    setPipelineSteps([
-      { label: "Analyse du texte source", status: "pending" },
-      { label: "Traduction en français", status: "pending" },
-      { label: "Génération de l'audio français", status: "pending" },
-      { label: "Sauvegarde du projet", status: "pending" },
-    ]);
+    let projectId: string | null = null;
+    let creditsUsed = 0;
 
     try {
-      // Step 1: Use the pasted text directly
+      // Step 1: create the project right away so failures are recorded too
       updatePipelineStep(0, { status: "active" });
-      const sourceText = youtubeUrl.trim();
-      setTranscript(sourceText);
-      setSourceLanguage("auto");
-      updatePipelineStep(0, { status: "completed", detail: `${sourceText.length} caractères` });
-
-      // Step 2: Translate to French
-      updatePipelineStep(1, { status: "active" });
-
-      const { data: translateData, error: translateError } = await supabase.functions.invoke('translate-text', {
-        body: { text: sourceText, targetLanguage: 'French' },
-      });
-
-      if (translateError || translateData?.error) {
-        throw new Error(translateData?.error || translateError?.message || "Échec de la traduction");
-      }
-
-      setTranslatedText(translateData.translatedText);
-      updatePipelineStep(1, { status: "completed", detail: `${translateData.translatedText.length} caractères traduits` });
-
-      // Step 3: Prepare TTS (browser Speech Synthesis - non-blocking)
-      updatePipelineStep(2, { status: "active" });
-
-      if (!('speechSynthesis' in window)) {
-        console.warn("Speech synthesis not supported in this browser");
-      }
-
-      // Just mark as ready - the user can play it from the result page
-      setAudioUrl("browser-speech");
-      updatePipelineStep(2, { status: "completed", detail: "Audio prêt — appuyez sur ▶ pour écouter" });
-
-      // Step 4: Save project to database
-      updatePipelineStep(3, { status: "active" });
-
-      const title = `Traduction FR: ${sourceText.slice(0, 40)}...`;
-
-      const { error: projectError } = await supabase
+      const { data: project, error: projectError } = await supabase
         .from("projects")
         .insert({
           user_id: user.id,
-          title,
-          script: sourceText,
-          target_language: "French",
-          source_language: "Unknown",
+          title: text.slice(0, 60) + (text.length > 60 ? "…" : ""),
+          script: text,
+          target_language: "Français",
+          source_language: "Auto",
           voice_type: selectedVoice,
-          intensity: "high",
-          video_format: "youtube",
-          status: "completed",
-          credits_used: 5,
-        });
+          status: "processing",
+          progress: 0,
+        })
+        .select("id")
+        .single();
 
-      if (projectError) {
-        console.error("Save error:", projectError);
-        toast.error("Projet traité mais échec de la sauvegarde");
+      if (projectError || !project) {
+        throw new Error(projectError?.message || "Impossible de créer le projet");
+      }
+      projectId = project.id;
+      updatePipelineStep(0, { status: "completed", detail: `${text.length} caractères` });
+
+      // Step 2: translate
+      updatePipelineStep(1, { status: "active" });
+      const translation = await invokeFunction<{ translatedText: string; creditsUsed?: number }>("translate-text", {
+        text,
+        targetLanguage: "French",
+      });
+      creditsUsed += translation.creditsUsed ?? 0;
+      await supabase
+        .from("projects")
+        .update({ translated_text: translation.translatedText, credits_used: creditsUsed, progress: 33 })
+        .eq("id", projectId);
+      updatePipelineStep(1, { status: "completed", detail: `${translation.translatedText.length} caractères traduits` });
+
+      // Step 3: generate the voice-over
+      updatePipelineStep(2, { status: "active" });
+      let audio: Blob | null = null;
+      try {
+        const speech = await generateSpeech(translation.translatedText, selectedVoice, (done, total) => {
+          if (total > 1) updatePipelineStep(2, { detail: `Segment ${done}/${total}` });
+        });
+        audio = speech.blob;
+        creditsUsed += speech.creditsUsed;
+        updatePipelineStep(2, { status: "completed", detail: `${Math.round(audio.size / 1024)} Ko` });
+      } catch (ttsError) {
+        // The translation is still useful: keep the project and fall back to the browser voice
+        const message = ttsError instanceof Error ? ttsError.message : "Erreur inconnue";
+        console.error("TTS error:", ttsError);
+        updatePipelineStep(2, { status: "error", detail: `${message} — la voix du navigateur sera utilisée` });
+        toast.warning("Audio non généré : la voix du navigateur sera utilisée à la place.");
       }
 
-      updatePipelineStep(3, { status: "completed", detail: "Projet sauvegardé" });
-      setCurrentStep("result");
-      toast.success("Pipeline terminé avec succès !");
+      // Step 4: store the audio
+      updatePipelineStep(3, { status: "active" });
+      let audioPath: string | null = null;
+      let duration: number | null = null;
+      if (audio) {
+        audioPath = `${user.id}/${projectId}.mp3`;
+        const { error: uploadError } = await supabase.storage
+          .from(AUDIO_BUCKET)
+          .upload(audioPath, audio, { contentType: "audio/mpeg" });
+        if (uploadError) throw new Error(`Échec de la sauvegarde de l'audio : ${uploadError.message}`);
+        duration = await getAudioDuration(audio);
+      }
 
+      const { error: finalError } = await supabase
+        .from("projects")
+        .update({
+          status: "completed",
+          progress: 100,
+          output_audio_path: audioPath,
+          duration_seconds: duration,
+          credits_used: creditsUsed,
+        })
+        .eq("id", projectId);
+      if (finalError) throw new Error(finalError.message);
+
+      updatePipelineStep(3, { status: "completed", detail: audioPath ? "Audio sauvegardé" : "Aucun audio à sauvegarder" });
+      toast.success("Projet terminé !");
+      navigate(`/project/${projectId}`);
     } catch (error) {
       console.error("Pipeline error:", error);
       const errorMsg = error instanceof Error ? error.message : "Erreur inconnue";
       toast.error(errorMsg);
-      
-      // Mark current active step as error
-      setPipelineSteps(prev => prev.map(step => 
+
+      setPipelineSteps(prev => prev.map(step =>
         step.status === "active" ? { ...step, status: "error", detail: errorMsg } : step
       ));
-      setIsProcessing(false);
-    }
-  };
 
-  const splitTextIntoChunks = (text: string, maxLength: number): string[] => {
-    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-    const chunks: string[] = [];
-    let current = "";
-
-    for (const sentence of sentences) {
-      if ((current + sentence).length > maxLength && current) {
-        chunks.push(current.trim());
-        current = sentence;
-      } else {
-        current += sentence;
+      if (projectId) {
+        await supabase
+          .from("projects")
+          .update({ status: "failed", error_message: errorMsg, credits_used: creditsUsed })
+          .eq("id", projectId);
       }
     }
-    if (current.trim()) chunks.push(current.trim());
-    return chunks;
   };
 
-  const togglePlayback = () => {
-    if (!audioUrl || !translatedText) return;
-
-    if (audioUrl === "browser-speech") {
-      if (isPlaying) {
-        window.speechSynthesis.cancel();
-        setIsPlaying(false);
-        return;
-      }
-
-      const speak = () => {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(translatedText);
-        utterance.lang = 'fr-FR';
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        const voices = window.speechSynthesis.getVoices();
-        const frenchVoice = voices.find(v => v.lang.startsWith('fr'));
-        if (frenchVoice) utterance.voice = frenchVoice;
-        utterance.onend = () => setIsPlaying(false);
-        utterance.onerror = (e) => {
-          console.error("Speech error:", e.error);
-          setIsPlaying(false);
-          toast.error("Erreur de synthèse vocale. Essayez avec un autre navigateur (Chrome recommandé).");
-        };
-        window.speechSynthesis.speak(utterance);
-        setIsPlaying(true);
-      };
-
-      // Voices may not be loaded yet — wait for them
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length === 0) {
-        window.speechSynthesis.onvoiceschanged = () => {
-          speak();
-          window.speechSynthesis.onvoiceschanged = null;
-        };
-        // Fallback if onvoiceschanged never fires
-        setTimeout(() => {
-          if (!isPlaying) speak();
-        }, 500);
-      } else {
-        speak();
-      }
-    } else if (audioElement) {
-      if (isPlaying) {
-        audioElement.pause();
-        setIsPlaying(false);
-      } else {
-        audioElement.play();
-        setIsPlaying(true);
-      }
-    } else {
-      const audio = new Audio(audioUrl);
-      audio.onended = () => setIsPlaying(false);
-      audio.play();
-      setAudioElement(audio);
-      setIsPlaying(true);
-    }
-  };
-
-  const downloadAudio = () => {
-    if (!audioUrl || audioUrl === "browser-speech") {
-      toast.info("Le téléchargement n'est pas disponible avec la synthèse vocale du navigateur. Utilisez une clé API ElevenLabs pour obtenir un fichier audio.");
-      return;
-    }
-    const link = document.createElement('a');
-    link.href = audioUrl;
-    link.download = 'voiceforge-french-audio.mp3';
-    link.click();
-  };
-
-  const isValidYouTubeUrl = (url: string) => {
-    return /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)/.test(url);
-  };
+  const hasError = pipelineSteps.some(s => s.status === "error") && !pipelineSteps.some(s => s.status === "active");
+  const wordCount = sourceText.split(/\s+/).filter(Boolean).length;
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -258,12 +173,11 @@ export const CreateProject = () => {
         <nav className="flex-1">
           <div className="space-y-2">
             {[
-              { id: "youtube" as Step, label: "Lien YouTube", icon: Youtube },
+              { id: "text" as Step, label: "Texte et voix", icon: FileText },
               { id: "processing" as Step, label: "Traitement", icon: Loader2 },
-              { id: "result" as Step, label: "Résultat", icon: Volume2 },
             ].map((step, index) => {
               const isActive = step.id === currentStep;
-              const stepOrder = ["youtube", "processing", "result"];
+              const stepOrder: Step[] = ["text", "processing"];
               const isCompleted = stepOrder.indexOf(currentStep) > stepOrder.indexOf(step.id);
               return (
                 <div
@@ -295,7 +209,7 @@ export const CreateProject = () => {
         <Link to="/dashboard">
           <Button variant="ghost" className="w-full justify-start">
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Retour au Dashboard
+            Retour au tableau de bord
           </Button>
         </Link>
       </aside>
@@ -304,43 +218,42 @@ export const CreateProject = () => {
       <main className="flex-1 p-8 overflow-auto">
         <div className="max-w-3xl mx-auto">
           <AnimatePresence mode="wait">
-            {/* Step 1: YouTube URL */}
-            {currentStep === "youtube" && (
+            {/* Step 1: text and voice */}
+            {currentStep === "text" && (
               <motion.div
-                key="youtube"
+                key="text"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-6"
               >
                 <div>
-                  <h1 className="text-3xl font-bold mb-2">Transformer une vidéo YouTube</h1>
+                  <h1 className="text-3xl font-bold mb-2">Nouveau projet</h1>
                   <p className="text-muted-foreground">
-                    Collez le lien d'une vidéo YouTube pour obtenir la transcription traduite en français avec la voix de votre choix.
+                    Collez un texte : il sera traduit en français puis converti en audio avec la voix de votre choix.
                   </p>
                 </div>
 
-                {/* Input Mode Toggle */}
                 <div className="glass-card p-6">
                   <div className="flex items-center gap-2 mb-4">
                     <FileText className="w-5 h-5 text-primary" />
                     <h3 className="font-semibold">Texte à transformer</h3>
                   </div>
                   <p className="text-sm text-muted-foreground mb-3">
-                    Collez le texte (transcription, script, discours...) que vous souhaitez traduire en français et convertir en audio.
+                    Transcription, script, discours… dans n'importe quelle langue.
                   </p>
                   <textarea
-                    value={youtubeUrl}
-                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                    value={sourceText}
+                    onChange={(e) => setSourceText(e.target.value)}
+                    maxLength={20000}
                     placeholder="Collez ici le texte à transformer en audio français..."
                     className="w-full h-48 bg-muted/50 rounded-lg p-4 text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
                   />
                   <div className="text-xs text-muted-foreground mt-2">
-                    {youtubeUrl.length} caractères · ~{Math.ceil(youtubeUrl.split(/\s+/).filter(Boolean).length / 150)} min d'audio
+                    {sourceText.length} / 20 000 caractères · ~{Math.ceil(wordCount / 150)} min d'audio
                   </div>
                 </div>
 
-                {/* Voice Selection */}
                 <div className="glass-card p-6">
                   <div className="flex items-center gap-2 mb-4">
                     <Mic className="w-5 h-5 text-primary" />
@@ -365,18 +278,12 @@ export const CreateProject = () => {
                   </div>
                 </div>
 
-                {/* Pipeline Preview */}
                 <div className="glass-card p-6">
                   <h3 className="font-semibold mb-3">Pipeline de traitement</h3>
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-500/10 text-red-400">
-                      <Youtube className="w-3.5 h-3.5" />
-                      YouTube
-                    </div>
-                    <ChevronRight className="w-4 h-4" />
                     <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-400">
                       <FileText className="w-3.5 h-3.5" />
-                      Transcription
+                      Texte
                     </div>
                     <ChevronRight className="w-4 h-4" />
                     <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/10 text-green-400">
@@ -389,6 +296,9 @@ export const CreateProject = () => {
                       Audio
                     </div>
                   </div>
+                  <p className="text-xs text-muted-foreground mt-3">
+                    Coût : 2 crédits pour la traduction + 3 crédits par segment audio (~4 500 caractères).
+                  </p>
                 </div>
 
                 <div className="flex justify-end">
@@ -396,7 +306,7 @@ export const CreateProject = () => {
                     variant="hero"
                     size="lg"
                     onClick={startPipeline}
-                    disabled={!youtubeUrl.trim() || youtubeUrl.trim().length < 10}
+                    disabled={sourceText.trim().length < 10}
                   >
                     <Sparkles className="w-5 h-5" />
                     Lancer la transformation
@@ -417,7 +327,7 @@ export const CreateProject = () => {
                 <div className="text-center">
                   <h1 className="text-3xl font-bold mb-2">Transformation en cours...</h1>
                   <p className="text-muted-foreground">
-                    Veuillez patienter pendant que nous traitons votre vidéo.
+                    Ne fermez pas cette page pendant le traitement.
                   </p>
                 </div>
 
@@ -500,101 +410,17 @@ export const CreateProject = () => {
                   </div>
                 </div>
 
-                {pipelineSteps.some(s => s.status === "error") && (
+                {hasError && (
                   <div className="flex justify-center gap-4">
-                    <Button variant="outline" onClick={() => { setCurrentStep("youtube"); setIsProcessing(false); }}>
+                    <Button variant="outline" onClick={() => setCurrentStep("text")}>
                       <ArrowLeft className="w-4 h-4 mr-2" />
                       Réessayer
                     </Button>
+                    <Link to="/dashboard">
+                      <Button variant="ghost">Voir mes projets</Button>
+                    </Link>
                   </div>
                 )}
-              </motion.div>
-            )}
-
-            {/* Step 3: Result */}
-            {currentStep === "result" && (
-              <motion.div
-                key="result"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div className="text-center">
-                  <h1 className="text-3xl font-bold mb-2">🎉 Transformation terminée !</h1>
-                  <p className="text-muted-foreground">
-                    Votre vidéo YouTube a été transcrite et traduite en français.
-                  </p>
-                </div>
-
-                {/* Audio Player */}
-                {audioUrl && (
-                  <div className="glass-card p-6">
-                    <div className="flex items-center gap-2 mb-4">
-                      <Volume2 className="w-5 h-5 text-primary" />
-                      <h3 className="font-semibold">Audio en français</h3>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <Button
-                        variant="hero"
-                        size="lg"
-                        className="rounded-full w-14 h-14"
-                        onClick={togglePlayback}
-                      >
-                        {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-0.5" />}
-                      </Button>
-                      <div className="flex-1">
-                        <div className="h-2 bg-muted rounded-full overflow-hidden">
-                          <motion.div
-                            className="h-full bg-gradient-to-r from-primary to-accent rounded-full"
-                            animate={{ width: isPlaying ? "100%" : "0%" }}
-                            transition={{ duration: 30, ease: "linear" }}
-                          />
-                        </div>
-                      </div>
-                      <Button variant="outline" onClick={downloadAudio}>
-                        <Download className="w-4 h-4 mr-2" />
-                        Télécharger
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Original Transcript */}
-                <div className="glass-card p-6">
-                  <div className="flex items-center gap-2 mb-4">
-                    <FileText className="w-5 h-5 text-blue-400" />
-                    <h3 className="font-semibold">Transcription originale ({sourceLanguage})</h3>
-                  </div>
-                  <div className="bg-muted/50 rounded-lg p-4 max-h-48 overflow-auto text-sm">
-                    {transcript}
-                  </div>
-                </div>
-
-                {/* French Translation */}
-                <div className="glass-card p-6">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Languages className="w-5 h-5 text-green-400" />
-                    <h3 className="font-semibold">Traduction française</h3>
-                  </div>
-                  <div className="bg-muted/50 rounded-lg p-4 max-h-48 overflow-auto text-sm">
-                    {translatedText}
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => { setCurrentStep("youtube"); setIsProcessing(false); setAudioUrl(null); setAudioElement(null); }}>
-                    <ArrowLeft className="w-4 h-4 mr-2" />
-                    Nouvelle transformation
-                  </Button>
-                  <Link to="/dashboard">
-                    <Button variant="hero">
-                      Voir mes projets
-                      <ChevronRight className="w-5 h-5" />
-                    </Button>
-                  </Link>
-                </div>
               </motion.div>
             )}
           </AnimatePresence>

@@ -79,6 +79,7 @@ export type Database = {
           error_message: string | null
           id: string
           intensity: Database["public"]["Enums"]["intensity_level"]
+          output_audio_path: string | null
           output_audio_url: string | null
           output_video_url: string | null
           progress: number | null
@@ -88,6 +89,7 @@ export type Database = {
           status: Database["public"]["Enums"]["project_status"]
           target_language: string
           title: string
+          translated_text: string | null
           updated_at: string
           user_id: string
           video_format: Database["public"]["Enums"]["video_format"]
@@ -100,6 +102,7 @@ export type Database = {
           error_message?: string | null
           id?: string
           intensity?: Database["public"]["Enums"]["intensity_level"]
+          output_audio_path?: string | null
           output_audio_url?: string | null
           output_video_url?: string | null
           progress?: number | null
@@ -109,6 +112,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["project_status"]
           target_language?: string
           title: string
+          translated_text?: string | null
           updated_at?: string
           user_id: string
           video_format?: Database["public"]["Enums"]["video_format"]
@@ -121,6 +125,7 @@ export type Database = {
           error_message?: string | null
           id?: string
           intensity?: Database["public"]["Enums"]["intensity_level"]
+          output_audio_path?: string | null
           output_audio_url?: string | null
           output_video_url?: string | null
           progress?: number | null
@@ -130,6 +135,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["project_status"]
           target_language?: string
           title?: string
+          translated_text?: string | null
           updated_at?: string
           user_id?: string
           video_format?: Database["public"]["Enums"]["video_format"]

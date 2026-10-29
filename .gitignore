@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local voice server
+voice-server/.venv
+voice-server/data
+__pycache__

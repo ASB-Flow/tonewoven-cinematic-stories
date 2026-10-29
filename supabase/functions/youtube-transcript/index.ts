@@ -1,10 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { YoutubeTranscript } from "npm:youtube-transcript@1.2.1";
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
-};
+import { corsHeaders, jsonResponse, getUser } from "../_shared/security.ts";
 
 function extractVideoId(url: string): string | null {
   const patterns = [
@@ -20,25 +16,24 @@ function extractVideoId(url: string): string | null {
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: corsHeaders(req) });
+  }
+
+  const user = await getUser(req);
+  if (!user) {
+    return jsonResponse(req, { error: 'Authentification requise' }, 401);
   }
 
   try {
     const { url } = await req.json();
 
     if (!url) {
-      return new Response(
-        JSON.stringify({ error: 'YouTube URL is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse(req, { error: 'YouTube URL is required' }, 400);
     }
 
     const videoId = extractVideoId(url);
     if (!videoId) {
-      return new Response(
-        JSON.stringify({ error: 'URL YouTube invalide' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse(req, { error: 'URL YouTube invalide' }, 400);
     }
 
     console.log('Extracting transcript for video:', videoId);
@@ -50,7 +45,7 @@ serve(async (req) => {
     }
 
     const text = transcriptItems
-      .map((item: any) => item.text)
+      .map((item: { text: string }) => item.text)
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -60,10 +55,7 @@ serve(async (req) => {
     // Try to detect language from the first transcript config
     const language = 'auto';
 
-    return new Response(
-      JSON.stringify({ transcript: text, language, videoId }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse(req, { transcript: text, language, videoId });
   } catch (error) {
     console.error('Error:', error);
     const message = error instanceof Error ? error.message : 'Échec de l\'extraction';
@@ -74,9 +66,6 @@ serve(async (req) => {
       userMessage = "Les sous-titres ne sont pas disponibles pour cette vidéo. Essayez une vidéo avec des sous-titres activés.";
     }
     
-    return new Response(
-      JSON.stringify({ error: userMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse(req, { error: userMessage }, 500);
   }
 });
