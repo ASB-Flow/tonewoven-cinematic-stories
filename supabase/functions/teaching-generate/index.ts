@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.93.1";
 import { corsHeaders, jsonResponse, getUser, consumeCredits, refundCredits } from "../_shared/security.ts";
 import {
-  THEME_KEYS, composeWeekPrompt, formatsPrompt, indexBookChapterPrompt, indexPrompt,
+  THEME_KEYS, composeWeekPrompt, formatsPrompt, indexBookChapterPrompt, indexPrompt, storyboardPrompt,
   type AudienceLine, type SourceInput,
 } from "./prompts.ts";
 
@@ -11,8 +11,9 @@ import {
 //  - index-book-chapter : tire d'un chapitre de livre 1 à 4 notes d'idées (jamais le texte lui-même)
 //  - compose-week : écrit les 3 leçons d'une semaine du parcours à partir des sources du thème
 //  - formats      : décline une leçon en script vidéo, post, WhatsApp, wolof et audio
+//  - storyboard   : découpe le Short de la leçon en scènes (voix, texte à l'écran, recherche Pexels)
 
-const COSTS = { index: 1, 'index-book-chapter': 1, 'compose-week': 3, formats: 2 } as const;
+const COSTS = { index: 1, 'index-book-chapter': 1, 'compose-week': 3, formats: 2, storyboard: 1 } as const;
 type Action = keyof typeof COSTS;
 
 const MODEL = 'openai/gpt-5-mini';
@@ -321,13 +322,57 @@ serve(async (req) => {
       return jsonResponse(req, { lessons, creditsUsed: cost });
     }
 
+    if (action === 'storyboard') {
+      const lessonId = String(body.lessonId ?? '');
+      if (!UUID.test(lessonId)) return jsonResponse(req, { error: 'Leçon invalide' }, 400);
+
+      const { data: lesson } = await db
+        .from('teaching_lessons')
+        .select('id, level, week, position, title, card, formats, teaching_paths(audience_line)')
+        .eq('id', lessonId)
+        .maybeSingle();
+      if (!lesson) return jsonResponse(req, { error: 'Leçon introuvable' }, 404);
+
+      cost = COSTS.storyboard;
+      if (!(await consumeCredits(user.id, cost))) {
+        cost = 0;
+        return jsonResponse(req, { error: 'Crédits insuffisants' }, 402);
+      }
+
+      const formats = (lesson.formats ?? {}) as Record<string, unknown>;
+      const line = ((lesson as Record<string, any>).teaching_paths?.audience_line ?? 'universal') as AudienceLine;
+      const code = `N${lesson.level}-S${lesson.week}-L${lesson.position}`;
+      const result = await askModel(storyboardPrompt(
+        line, code, lesson.title, lesson.card as Record<string, string>, text(formats.video, 4000),
+      ));
+      const scenes = (Array.isArray(result.scenes) ? result.scenes as Array<Record<string, unknown>> : [])
+        .map((scene) => ({
+          voice: text(scene.voice, 800),
+          screen_text: text(scene.screen_text, 80),
+          query: text(scene.query, 100),
+        }))
+        .filter((scene) => scene.voice)
+        .slice(0, 20);
+      if (scenes.length < 2) throw new Error("Découpage en scènes incomplet, réessayez");
+
+      const { data: updated, error } = await db
+        .from('teaching_lessons')
+        .update({ formats: { ...formats, storyboard: scenes } })
+        .eq('id', lessonId)
+        .select('*')
+        .single();
+      if (error) throw new Error(error.message);
+
+      return jsonResponse(req, { lesson: updated, creditsUsed: cost });
+    }
+
     // formats
     const lessonId = String(body.lessonId ?? '');
     if (!UUID.test(lessonId)) return jsonResponse(req, { error: 'Leçon invalide' }, 400);
 
     const { data: lesson } = await db
       .from('teaching_lessons')
-      .select('id, level, week, position, title, card, teaching_paths(audience_line)')
+      .select('id, level, week, position, title, card, formats, teaching_paths(audience_line)')
       .eq('id', lessonId)
       .maybeSingle();
     if (!lesson) return jsonResponse(req, { error: 'Leçon introuvable' }, 404);
@@ -341,7 +386,11 @@ serve(async (req) => {
     const line = ((lesson as Record<string, any>).teaching_paths?.audience_line ?? 'universal') as AudienceLine;
     const code = `N${lesson.level}-S${lesson.week}-L${lesson.position}`;
     const result = await askModel(formatsPrompt(line, code, lesson.title, lesson.card as Record<string, string>));
-    const formats = Object.fromEntries(FORMAT_KEYS.map((k) => [k, text(result[k], 6000)]));
+    const previous = ((lesson as Record<string, any>).formats ?? {}) as Record<string, unknown>;
+    const formats = {
+      ...previous,
+      ...Object.fromEntries(FORMAT_KEYS.map((k) => [k, text(result[k], 6000)])),
+    };
     if (!formats.video || !formats.post) throw new Error("Formats incomplets, réessayez");
 
     const { data: updated, error } = await db

@@ -118,3 +118,20 @@ Décline cette leçon en 5 formats. Renvoie un JSON avec exactement ces clés :
 - "wolof" : version en wolof parlé de Dakar (orthographe standard CLAD, mots français courants acceptés quand c'est l'usage), 80 à 120 mots, même structure : accroche, principe, exemple, action, teaser. Adapte, ne traduis pas mot à mot. Ajoute ensuite une ligne « --- Traduction pour relecture --- » et la traduction française ligne à ligne.
 - "audio" : texte à lire à voix haute de 2 à 3 minutes (300 à 400 mots), ton de conversation. Commence par « Salam aleykum, bonjour, ici le parcours, leçon ${code}. ». Phrases courtes, l'idée clé répétée 3 fois, une petite histoire, l'action du jour, le teaser. Marque les pauses avec [pause].`,
 });
+
+export const storyboardPrompt = (line: AudienceLine, code: string, title: string, card: Record<string, string>, videoScript: string) => ({
+  system: commonContext(line),
+  user: `Leçon ${code} : « ${title} ».
+Fiche :
+${JSON.stringify(card, null, 2)}
+
+Script vidéo existant (peut être vide) :
+${videoScript || '—'}
+
+Découpe ce Short vertical de 45 à 60 secondes en 5 à 8 scènes. Pour chaque scène :
+- "voice" : ce que dit la voix off, en français, phrases courtes et naturelles à l'oral (sans indications techniques, sans hashtags, sans « ÉCRAN : »). Au total 120 à 150 mots pour toutes les scènes.
+- "screen_text" : 2 à 6 mots en gros à l'écran, ou "" (en mettre sur la 1re scène, l'action du jour et la dernière scène)
+- "query" : 2 à 4 mots-clés EN ANGLAIS pour chercher une vidéo libre de droits sur Pexels qui illustre la scène (ex. "fisherman boat sunrise", "african woman market", "young man thinking city"). Privilégie des images de l'Afrique de l'Ouest, de l'océan, de la ville, de personnes noires. Pas de logos ni de personnes célèbres.
+Ordre : 1 accroche, 2-4 principe et illustration, avant-dernière = action du jour, dernière = teaser de demain.
+Renvoie : {"scenes": [{"voice": "...", "screen_text": "...", "query": "..."}]}`,
+});
