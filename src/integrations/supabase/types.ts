@@ -79,6 +79,7 @@ export type Database = {
           error_message: string | null
           id: string
           intensity: Database["public"]["Enums"]["intensity_level"]
+          output_audio_path: string | null
           output_audio_url: string | null
           output_video_url: string | null
           progress: number | null
@@ -88,6 +89,7 @@ export type Database = {
           status: Database["public"]["Enums"]["project_status"]
           target_language: string
           title: string
+          translated_text: string | null
           updated_at: string
           user_id: string
           video_format: Database["public"]["Enums"]["video_format"]
@@ -100,6 +102,7 @@ export type Database = {
           error_message?: string | null
           id?: string
           intensity?: Database["public"]["Enums"]["intensity_level"]
+          output_audio_path?: string | null
           output_audio_url?: string | null
           output_video_url?: string | null
           progress?: number | null
@@ -109,6 +112,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["project_status"]
           target_language?: string
           title: string
+          translated_text?: string | null
           updated_at?: string
           user_id: string
           video_format?: Database["public"]["Enums"]["video_format"]
@@ -121,6 +125,7 @@ export type Database = {
           error_message?: string | null
           id?: string
           intensity?: Database["public"]["Enums"]["intensity_level"]
+          output_audio_path?: string | null
           output_audio_url?: string | null
           output_video_url?: string | null
           progress?: number | null
@@ -130,12 +135,191 @@ export type Database = {
           status?: Database["public"]["Enums"]["project_status"]
           target_language?: string
           title?: string
+          translated_text?: string | null
           updated_at?: string
           user_id?: string
           video_format?: Database["public"]["Enums"]["video_format"]
           voice_type?: string
         }
         Relationships: []
+      }
+      teaching_book_notes: {
+        Row: {
+          book_title: string
+          chapter_index: number
+          chapter_title: string
+          created_at: string
+          id: string
+          key_idea: string
+          level: number
+          short_quote: string | null
+          theme: string
+          user_id: string
+        }
+        Insert: {
+          book_title: string
+          chapter_index: number
+          chapter_title: string
+          created_at?: string
+          id?: string
+          key_idea: string
+          level: number
+          short_quote?: string | null
+          theme: string
+          user_id: string
+        }
+        Update: {
+          book_title?: string
+          chapter_index?: number
+          chapter_title?: string
+          created_at?: string
+          id?: string
+          key_idea?: string
+          level?: number
+          short_quote?: string | null
+          theme?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      teaching_lessons: {
+        Row: {
+          card: Json
+          created_at: string
+          formats: Json
+          id: string
+          level: number
+          path_id: string
+          position: number
+          publish_date: string | null
+          source_note_ids: string[]
+          source_project_ids: string[]
+          status: Database["public"]["Enums"]["lesson_status"]
+          title: string
+          updated_at: string
+          user_id: string
+          week: number
+        }
+        Insert: {
+          card: Json
+          created_at?: string
+          formats?: Json
+          id?: string
+          level: number
+          path_id: string
+          position: number
+          publish_date?: string | null
+          source_note_ids?: string[]
+          source_project_ids?: string[]
+          status?: Database["public"]["Enums"]["lesson_status"]
+          title: string
+          updated_at?: string
+          user_id: string
+          week: number
+        }
+        Update: {
+          card?: Json
+          created_at?: string
+          formats?: Json
+          id?: string
+          level?: number
+          path_id?: string
+          position?: number
+          publish_date?: string | null
+          source_note_ids?: string[]
+          source_project_ids?: string[]
+          status?: Database["public"]["Enums"]["lesson_status"]
+          title?: string
+          updated_at?: string
+          user_id?: string
+          week?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "teaching_lessons_path_id_fkey"
+            columns: ["path_id"]
+            isOneToOne: false
+            referencedRelation: "teaching_paths"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      teaching_paths: {
+        Row: {
+          audience_line: string
+          created_at: string
+          id: string
+          plan: Json
+          start_date: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          audience_line?: string
+          created_at?: string
+          id?: string
+          plan: Json
+          start_date: string
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          audience_line?: string
+          created_at?: string
+          id?: string
+          plan?: Json
+          start_date?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      teaching_sources: {
+        Row: {
+          created_at: string
+          examples: Json
+          id: string
+          key_idea: string
+          level: number
+          project_id: string
+          short_quote: string | null
+          theme: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          examples?: Json
+          id?: string
+          key_idea: string
+          level: number
+          project_id: string
+          short_quote?: string | null
+          theme: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          examples?: Json
+          id?: string
+          key_idea?: string
+          level?: number
+          project_id?: string
+          short_quote?: string | null
+          theme?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "teaching_sources_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_roles: {
         Row: {
@@ -175,6 +359,7 @@ export type Database = {
     Enums: {
       app_role: "admin" | "moderator" | "user"
       intensity_level: "low" | "medium" | "high"
+      lesson_status: "draft" | "reviewed" | "published"
       project_status: "draft" | "processing" | "completed" | "failed"
       video_format: "youtube" | "shorts"
     }
@@ -306,6 +491,7 @@ export const Constants = {
     Enums: {
       app_role: ["admin", "moderator", "user"],
       intensity_level: ["low", "medium", "high"],
+      lesson_status: ["draft", "reviewed", "published"],
       project_status: ["draft", "processing", "completed", "failed"],
       video_format: ["youtube", "shorts"],
     },
